@@ -314,6 +314,11 @@ def eye_detection_worker():
                 blink_payload = str(blink_count)
                 mqtt_client.publish(TOPIC_BLINK_RATE, blink_payload)
                 log.info("Blink rate: %d blinks/min", blink_count)
+                # blink_count == 0 is skipped intentionally: it typically means
+                # the face was not detected during that minute (e.g. at startup
+                # or if the rider looks away), so it should not generate a false
+                # low-blink alert.  A sustained zero count will be caught by the
+                # eye-closure / fatigue logic instead.
                 if blink_count < BLINK_MIN_PER_MIN and blink_count > 0:
                     mqtt_client.publish(TOPIC_ALERT,
                         json.dumps({"source": "server", "type": "low_blink",

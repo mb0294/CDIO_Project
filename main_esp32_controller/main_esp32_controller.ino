@@ -307,7 +307,11 @@ void readGyroscope() {
 
 void readAlcohol() {
   g_alcoholRaw = analogRead(ALCOHOL_PIN);
-  // Map raw ADC (0-4095) to 0-100 %
+  // Linear mapping of the raw ADC value (0–4095) to a 0–100 % scale.
+  // NOTE: The MQ-3 response curve is logarithmic; this mapping is a
+  // first-order approximation for relative comparison.  Calibrate the
+  // ALCOHOL_THRESHOLD constant against known reference concentrations for
+  // precise readings.
   g_alcoholPct = map(g_alcoholRaw, 0, 4095, 0, 100);
 }
 
@@ -416,7 +420,10 @@ String buildSMSMessage(const char* alertType) {
 }
 
 void sendSMS(const char* number, const char* message) {
-  if (strlen(number) < 6) return;   // Skip placeholder numbers
+  // Skip numbers that are clearly placeholder values (length check rejects
+  // strings like "+33600000000" that the user has not replaced yet, while
+  // accepting real international numbers of 7+ digits including the + prefix).
+  if (strlen(number) < 7) return;
   Serial.printf("[SMS] Sending to %s\n", number);
   sim800Serial.print("AT+CMGS=\"");
   sim800Serial.print(number);

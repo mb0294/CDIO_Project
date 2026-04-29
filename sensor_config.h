@@ -81,6 +81,10 @@
 // ===========================================================================
 // Emergency Contacts  (SIM800L)
 // ===========================================================================
+// ⚠️  IMPORTANT: Replace these placeholder numbers with real emergency contact
+//     numbers before deploying.  The format is international E.164, e.g.
+//     "+33612345678" for a French number.  Failing to update them means no SMS
+//     alerts will be sent in an emergency.
 #define EMERGENCY_CONTACT_1  "+33600000000"   // Replace with real numbers
 #define EMERGENCY_CONTACT_2  "+33600000001"
 
