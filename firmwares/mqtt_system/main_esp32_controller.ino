@@ -3,7 +3,7 @@
  *
  * Smart Helmet – Main ESP32 Sensor Controller
  * -------------------------------------------
- * Reads all helmet sensors and publishes data via MQTT.
+ * Reads all helmet sensors and publishes data via HTTP.
  * Triggers local (buzzer) and remote (SMS via SIM800L) alerts.
  *
  * Sensors:
@@ -18,20 +18,19 @@
  *   - TinyGPSPlus    (Mikal Hart)
  *   - SparkFun MAX3010x Pulse and Proximity Sensor Library
  *   - MPU9250        (hideakitai)
- *   - PubSubClient   (Nick O'Leary)
  *   - ArduinoJson    (Benoit Blanchon)
  */
 
 #include <Wire.h>
 #include <WiFi.h>
-#include <PubSubClient.h>
+#include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <TinyGPS++.h>
 #include <HardwareSerial.h>
 #include "MAX30105.h"
 #include "heartRate.h"
 #include <MPU9250.h>
-#include "mqtt_config.h"
+#include "http_config.h"
 #include "sensor_config.h"
 
 // ---------------------------------------------------------------------------
@@ -48,17 +47,23 @@ MAX30105     heartSensor;
 MPU9250      mpu;
 
 // ---------------------------------------------------------------------------
-// MQTT
+// Network
 // ---------------------------------------------------------------------------
-WiFiClient   wifiClient;
-PubSubClient mqttClient(wifiClient);
+WiFiClient wifiClient;
 
 // ---------------------------------------------------------------------------
 // State / timing
 // ---------------------------------------------------------------------------
-unsigned long g_lastSensorRead   = 0;
-unsigned long g_lastMqttPublish  = 0;
-unsigned long g_lastSmsSent      = 0;
+unsigned long g_lastSensorRead     = 0;
+unsigned long g_lastHttpPublish    = 0;
+unsigned long g_lastCommandPoll    = 0;
+unsigned long g_lastSmsSent        = 0;
+unsigned long g_nextPublishAttempt = 0;
+unsigned long g_nextPollAttempt    = 0;
+unsigned long g_publishRetryDelay  = HTTP_RETRY_INITIAL_DELAY;
+unsigned long g_pollRetryDelay     = HTTP_RETRY_INITIAL_DELAY;
+unsigned int  g_publishRetries     = 0;
+unsigned int  g_pollRetries        = 0;
 
 // Sensor values
 float   g_latitude     = 0.0f;
@@ -80,7 +85,7 @@ bool    g_crashDetected       = false;
 bool    g_alcoholAlert        = false;
 bool    g_heartRateAlert      = false;
 bool    g_leanAngleAlert      = false;
-bool    g_fatigue             = false;  // set via MQTT from ESP32-CAM
+bool    g_fatigue             = false;  // set via HTTP polling
 
 // Heart-rate ring buffer (SparkFun library style)
 const byte RATE_SIZE = 4;
@@ -94,14 +99,15 @@ int    beatAvg        = 0;
 // Forward declarations
 // ---------------------------------------------------------------------------
 void connectWiFi();
-void connectMQTT();
-void mqttCallback(char* topic, byte* payload, unsigned int len);
+bool httpPostJson(const char* path, const String& payload, int* code = nullptr, String* body = nullptr);
+bool httpGet(const char* path, String& body, int* code = nullptr);
 void readGPS();
 void readHeartRate();
 void readGyroscope();
 void readAlcohol();
 void readPressure();
 void publishSensorData();
+void checkCommandsFromServer();
 void checkAlerts();
 void triggerAlert(const char* alertType, const char* message);
 void sendSMS(const char* number, const char* message);
@@ -150,11 +156,6 @@ void setup() {
   }
 
   connectWiFi();
-
-  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
-  mqttClient.setCallback(mqttCallback);
-  connectMQTT();
-
   Serial.println("[MAIN] Smart Helmet controller ready ✓");
 }
 
@@ -162,17 +163,19 @@ void setup() {
 // loop()
 // ===========================================================================
 void loop() {
-  if (!mqttClient.connected()) {
-    connectMQTT();
+  static unsigned long lastWifiAttempt = 0;
+  unsigned long now = millis();
+
+  if (WiFi.status() != WL_CONNECTED && now - lastWifiAttempt > 10000) {
+    lastWifiAttempt = now;
+    connectWiFi();
   }
-  mqttClient.loop();
 
   // Feed GPS decoder with available bytes
   while (gpsSerial.available()) {
     gps.encode(gpsSerial.read());
   }
 
-  unsigned long now = millis();
   if (now - g_lastSensorRead >= SENSOR_READ_INTERVAL_MS) {
     g_lastSensorRead = now;
     readGPS();
@@ -183,14 +186,19 @@ void loop() {
     checkAlerts();
   }
 
-  if (now - g_lastMqttPublish >= SENSOR_PUBLISH_INTERVAL) {
-    g_lastMqttPublish = now;
+  if (now - g_lastHttpPublish >= SENSOR_PUBLISH_INTERVAL && now >= g_nextPublishAttempt) {
+    g_lastHttpPublish = now;
     publishSensorData();
+  }
+
+  if (now - g_lastCommandPoll >= COMMAND_POLL_INTERVAL && now >= g_nextPollAttempt) {
+    g_lastCommandPoll = now;
+    checkCommandsFromServer();
   }
 }
 
 // ===========================================================================
-// WiFi / MQTT
+// WiFi / HTTP helpers
 // ===========================================================================
 void connectWiFi() {
   Serial.printf("[WIFI] Connecting to %s", WIFI_SSID);
@@ -207,46 +215,96 @@ void connectWiFi() {
   }
 }
 
-void connectMQTT() {
-  static unsigned long lastAttempt = 0;
-  if (millis() - lastAttempt < MQTT_RECONNECT_INTERVAL) return;
-  lastAttempt = millis();
+bool httpPostJson(const char* path, const String& payload, int* code, String* body) {
+  if (WiFi.status() != WL_CONNECTED) return false;
 
-  Serial.printf("[MQTT] Connecting to %s:%d ...\n", MQTT_BROKER, MQTT_PORT);
-  if (mqttClient.connect(MQTT_CLIENT_ESP32, MQTT_USER, MQTT_PASSWORD_BROKER)) {
-    Serial.println("[MQTT] Connected");
-    mqttClient.subscribe(TOPIC_FATIGUE);
-    mqttClient.subscribe(TOPIC_CMD_THRESHOLD);
-    mqttClient.subscribe(TOPIC_CMD_CONTACT);
-    mqttClient.subscribe(TOPIC_CMD_RESET);
-  } else {
-    Serial.printf("[MQTT] Failed, rc=%d\n", mqttClient.state());
+  HTTPClient http;
+  String url = String(HTTP_SERVER_URL) + path;
+  if (!http.begin(wifiClient, url)) {
+    return false;
   }
+
+  http.addHeader("Content-Type", "application/json");
+  if (strlen(HTTP_AUTH_TOKEN) > 0) {
+    http.addHeader("Authorization", String("Bearer ") + HTTP_AUTH_TOKEN);
+  }
+
+  int httpCode = http.POST(payload);
+  if (code) *code = httpCode;
+  if (body && httpCode > 0) *body = http.getString();
+  http.end();
+
+  return httpCode >= 200 && httpCode < 300;
 }
 
-void mqttCallback(char* topic, byte* payload, unsigned int len) {
-  char msg[len + 1];
-  memcpy(msg, payload, len);
-  msg[len] = '\0';
+bool httpGet(const char* path, String& body, int* code) {
+  body = "";
+  if (WiFi.status() != WL_CONNECTED) return false;
 
-  if (strcmp(topic, TOPIC_FATIGUE) == 0) {
-    StaticJsonDocument<128> doc;
-    if (deserializeJson(doc, msg) == DeserializationError::Ok) {
-      bool newFatigue = doc["fatigue"] | false;
-      if (newFatigue && !g_fatigue) {
-        g_fatigue = true;
-        triggerAlert("fatigue", "Driver fatigue detected");
-      } else if (!newFatigue) {
-        g_fatigue = false;
-      }
-    }
-  } else if (strcmp(topic, TOPIC_CMD_RESET) == 0) {
+  HTTPClient http;
+  String url = String(HTTP_SERVER_URL) + path;
+  if (!http.begin(wifiClient, url)) {
+    return false;
+  }
+
+  if (strlen(HTTP_AUTH_TOKEN) > 0) {
+    http.addHeader("Authorization", String("Bearer ") + HTTP_AUTH_TOKEN);
+  }
+
+  int httpCode = http.GET();
+  if (code) *code = httpCode;
+  if (httpCode > 0) body = http.getString();
+  http.end();
+
+  return httpCode >= 200 && httpCode < 300;
+}
+
+void checkCommandsFromServer() {
+  String payload;
+  int httpCode = 0;
+  if (!httpGet(API_COMMANDS_PENDING, payload, &httpCode)) {
+    if (g_pollRetries < HTTP_MAX_RETRIES) g_pollRetries++;
+    g_nextPollAttempt = millis() + g_pollRetryDelay;
+    g_pollRetryDelay = min(g_pollRetryDelay * 2UL, (unsigned long)HTTP_RETRY_MAX_DELAY);
+    Serial.printf("[HTTP] Command poll failed (code=%d), retry in %lu ms\n", httpCode, g_pollRetryDelay);
+    return;
+  }
+
+  g_pollRetries = 0;
+  g_pollRetryDelay = HTTP_RETRY_INITIAL_DELAY;
+  g_nextPollAttempt = 0;
+
+  StaticJsonDocument<512> doc;
+  if (deserializeJson(doc, payload) != DeserializationError::Ok) {
+    Serial.println("[HTTP] Command poll JSON parse error");
+    return;
+  }
+
+  bool reset = doc["reset"] | false;
+  if (reset) {
     g_crashDetected  = false;
     g_alcoholAlert   = false;
     g_heartRateAlert = false;
     g_leanAngleAlert = false;
     g_fatigue        = false;
-    Serial.println("[MAIN] Alerts reset via MQTT");
+    Serial.println("[MAIN] Alerts reset via HTTP command");
+  }
+
+  JsonVariant fatigueVar = doc["fatigue"];
+  if (!fatigueVar.isNull()) {
+    bool newFatigue = false;
+    if (fatigueVar.is<bool>()) {
+      newFatigue = fatigueVar.as<bool>();
+    } else if (fatigueVar["value"].is<bool>()) {
+      newFatigue = fatigueVar["value"].as<bool>();
+    }
+
+    if (newFatigue && !g_fatigue) {
+      g_fatigue = true;
+      triggerAlert("fatigue", "Driver fatigue detected");
+    } else if (!newFatigue) {
+      g_fatigue = false;
+    }
   }
 }
 
@@ -370,16 +428,17 @@ void triggerAlert(const char* alertType, const char* message) {
   delay(500);
   digitalWrite(LED_PIN, LOW);
 
-  // Publish alert over MQTT
+  // Publish alert over HTTP
   StaticJsonDocument<256> doc;
   doc["type"]      = alertType;
   doc["message"]   = message;
   doc["lat"]       = g_latitude;
   doc["lon"]       = g_longitude;
   doc["timestamp"] = millis();
-  char buf[256];
-  serializeJson(doc, buf);
-  mqttClient.publish(TOPIC_ALERT, buf, true);
+  String payload;
+  serializeJson(doc, payload);
+  int code = 0;
+  httpPostJson(API_ALERT, payload, &code, nullptr);
 
   // SMS alert (rate-limited)
   unsigned long now = millis();
@@ -446,45 +505,36 @@ void buzzAlert(int count) {
 }
 
 // ===========================================================================
-// MQTT Publish – all sensor data as JSON
+// HTTP Publish – all sensor data as JSON batch
 // ===========================================================================
 void publishSensorData() {
-  if (!mqttClient.connected()) return;
-
-  // GPS
-  StaticJsonDocument<128> gpsDoc;
+  StaticJsonDocument<512> doc;
+  JsonObject gpsDoc = doc.createNestedObject("gps");
   gpsDoc["lat"] = g_latitude;
   gpsDoc["lon"] = g_longitude;
   gpsDoc["alt"] = g_altitude_gps;
-  char gpsBuf[128];
-  serializeJson(gpsDoc, gpsBuf);
-  mqttClient.publish(TOPIC_GPS, gpsBuf);
 
-  // Heart rate
-  char hrBuf[16];
-  snprintf(hrBuf, sizeof(hrBuf), "%d", g_heartRate);
-  mqttClient.publish(TOPIC_HEART_RATE, hrBuf);
+  doc["heart_rate"] = g_heartRate;
+  doc["spo2"] = g_spo2;
+  doc["alcohol"] = g_alcoholPct;
+  doc["lean_angle"] = g_leanAngle;
+  doc["pressure"] = g_pressureRaw;
+  doc["altitude"] = g_altitude_bar;
+  doc["crash"] = g_crashDetected;
 
-  // SpO2
-  char spo2Buf[16];
-  snprintf(spo2Buf, sizeof(spo2Buf), "%d", g_spo2);
-  mqttClient.publish(TOPIC_SPO2, spo2Buf);
+  String payload;
+  serializeJson(doc, payload);
 
-  // Alcohol
-  char alcBuf[16];
-  snprintf(alcBuf, sizeof(alcBuf), "%.1f", g_alcoholPct);
-  mqttClient.publish(TOPIC_ALCOHOL, alcBuf);
+  int httpCode = 0;
+  if (httpPostJson(API_SENSORS_BATCH, payload, &httpCode, nullptr)) {
+    g_publishRetries = 0;
+    g_publishRetryDelay = HTTP_RETRY_INITIAL_DELAY;
+    g_nextPublishAttempt = 0;
+    return;
+  }
 
-  // Lean angle
-  char leanBuf[16];
-  snprintf(leanBuf, sizeof(leanBuf), "%.1f", g_leanAngle);
-  mqttClient.publish(TOPIC_LEAN_ANGLE, leanBuf);
-
-  // Pressure / altitude
-  char altBuf[16];
-  snprintf(altBuf, sizeof(altBuf), "%.1f", g_altitude_bar);
-  mqttClient.publish(TOPIC_ALTITUDE, altBuf);
-
-  // Crash flag
-  mqttClient.publish(TOPIC_CRASH, g_crashDetected ? "1" : "0");
+  if (g_publishRetries < HTTP_MAX_RETRIES) g_publishRetries++;
+  g_nextPublishAttempt = millis() + g_publishRetryDelay;
+  g_publishRetryDelay = min(g_publishRetryDelay * 2UL, (unsigned long)HTTP_RETRY_MAX_DELAY);
+  Serial.printf("[HTTP] Sensor publish failed (code=%d), retry in %lu ms\n", httpCode, g_publishRetryDelay);
 }
