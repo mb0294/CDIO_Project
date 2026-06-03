@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Helmet - Dashboard MQTT</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, #e84040, #ff6b6b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+
+        .status.connected {
+            background: #4caf50;
+            color: white;
+        }
+
+        .status.disconnected {
+            background: #f44336;
+            color: white;
+        }
+
+        .video-button {
+            display: inline-block;
+            margin-top: 15px;
+            padding: 12px 30px;
+            background: linear-gradient(90deg, #e84040, #ff6b6b);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: transform 0.3s, box-shadow 0.3s;
+            text-decoration: none;
+        }
+
+        .video-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(232, 64, 64, 0.4);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 25px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .card-title {
+            font-size: 1.1em;
+            color: #888;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .card-value {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #e0e0e0;
+        }
+
+        .card-unit {
+            font-size: 0.8em;
+            color: #888;
+            margin-left: 5px;
+        }
+
+        .card.alert {
+            border: 2px solid #e84040;
+            background: rgba(232, 64, 64, 0.1);
+        }
+
+        .card.alert .card-value {
+            color: #e84040;
+        }
+
+        .card.warning {
+            border: 2px solid #ff9800;
+            background: rgba(255, 152, 0, 0.1);
+        }
+
+        .card.warning .card-value {
+            color: #ff9800;
+        }
+
+        .card.success {
+            border: 2px solid #4caf50;
+            background: rgba(76, 175, 80, 0.1);
+        }
+
+        .card.success .card-value {
+            color: #4caf50;
+        }
+
+        .config-section {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .config-section h3 {
+            margin-bottom: 15px;
+            color: #888;
+        }
+
+        .config-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            gap: 10px;
+        }
+
+        .config-item label {
+            min-width: 150px;
+            color: #888;
+        }
+
+        .config-item input {
+            flex: 1;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            color: #e0e0e0;
+            font-size: 0.9em;
+        }
+
+        .config-item input:focus {
+            outline: none;
+            border-color: #e84040;
+        }
+
+        .connect-button {
+            padding: 10px 25px;
+            background: linear-gradient(90deg, #4caf50, #8bc34a);
+            color: white;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: transform 0.3s;
+        }
+
+        .connect-button:hover {
+            transform: translateY(-2px);
+        }
+
+        .last-update {
+            text-align: center;
+            color: #888;
+            font-size: 0.9em;
+            margin-top: 20px;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 1.8em;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            .card-value {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🪖 Smart Helmet Dashboard</h1>
+            <div id="connectionStatus" class="status disconnected">Déconnecté</div>
+            <br>
+            <a id="videoButton" href="#" target="_blank" class="video-button">📹 Voir la vidéo en direct</a>
+        </header>
+
+        <div class="config-section">
+            <h3>⚙️ Configuration MQTT</h3>
+            <div class="config-item">
+                <label>Broker:</label>
+                <input type="text" id="mqttBroker" value="broker.hivemq.com">
+            </div>
+            <div class="config-item">
+                <label>Port:</label>
+                <input type="number" id="mqttPort" value="8000">
+            </div>
+            <div class="config-item">
+                <label>Path:</label>
+                <input type="text" id="mqttPath" value="/mqtt">
+            </div>
+            <div class="config-item">
+                <label>URL Vidéo:</label>
+                <input type="text" id="videoUrl" value="http://192.168.1.100/stream">
+            </div>
+            <button class="connect-button" onclick="connectMQTT()">🔌 Se connecter</button>
+        </div>
+
+        <div class="grid">
+            <!-- Eye Status -->
+            <div class="card" id="eyeCard">
+                <div class="card-title">👁️ État des yeux</div>
+                <div class="card-value" id="eyeStatus">-</div>
+            </div>
+
+            <!-- Heart Rate -->
+            <div class="card">
+                <div class="card-title">❤️ Fréquence cardiaque</div>
+                <div class="card-value" id="heartRate">-<span class="card-unit">BPM</span></div>
+            </div>
+
+            <!-- SpO2 -->
+            <div class="card">
+                <div class="card-title">🩸 SpO2</div>
+                <div class="card-value" id="spo2">-<span class="card-unit">%</span></div>
+            </div>
+
+            <!-- Alcohol -->
+            <div class="card">
+                <div class="card-title">🍺 Alcool</div>
+                <div class="card-value" id="alcohol">-<span class="card-unit">mg/L</span></div>
+            </div>
+
+            <!-- GPS Latitude -->
+            <div class="card">
+                <div class="card-title">📍 Latitude</div>
+                <div class="card-value" id="gpsLat">-</div>
+            </div>
+
+            <!-- GPS Longitude -->
+            <div class="card">
+                <div class="card-title">📍 Longitude</div>
+                <div class="card-value" id="gpsLon">-</div>
+            </div>
+
+            <!-- Pressure -->
+            <div class="card">
+                <div class="card-title">⏲️ Pression</div>
+                <div class="card-value" id="pressure">-<span class="card-unit">hPa</span></div>
+            </div>
+
+            <!-- Altitude -->
+            <div class="card">
+                <div class="card-title">⛰️ Altitude</div>
+                <div class="card-value" id="altitude">-<span class="card-unit">m</span></div>
+            </div>
+
+            <!-- Lean Angle -->
+            <div class="card">
+                <div class="card-title">📐 Angle d'inclinaison</div>
+                <div class="card-value" id="leanAngle">-<span class="card-unit">°</span></div>
+            </div>
+
+            <!-- Crash Detection -->
+            <div class="card" id="crashCard">
+                <div class="card-title">💥 Détection crash</div>
+                <div class="card-value" id="crashStatus">-</div>
+            </div>
+
+            <!-- EAR -->
+            <div class="card">
+                <div class="card-title">👁️ EAR (Eye Aspect Ratio)</div>
+                <div class="card-value" id="earValue">-</div>
+            </div>
+
+            <!-- Blink Rate -->
+            <div class="card">
+                <div class="card-title">👁️ Clignements/min</div>
+                <div class="card-value" id="blinkRate">-<span class="card-unit">/min</span></div>
+            </div>
+        </div>
+
+        <div class="last-update">
+            Dernière mise à jour: <span id="lastUpdate">-</span>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const CONFIG = {
+            broker: document.getElementById('mqttBroker').value,
+            port: parseInt(document.getElementById('mqttPort').value),
+            path: document.getElementById('mqttPath').value,
+            videoUrl: document.getElementById('videoUrl').value,
+            topics: {
+                eyeStatus: 'helmet/eye/status',
+                heartRate: 'helmet/sensors/heart_rate',
+                spo2: 'helmet/sensors/spo2',
+                alcohol: 'helmet/sensors/alcohol',
+                gps: 'helmet/sensors/gps',
+                pressure: 'helmet/sensors/pressure',
+                altitude: 'helmet/sensors/altitude',
+                leanAngle: 'helmet/sensors/lean_angle',
+                crash: 'helmet/sensors/crash',
+                ear: 'helmet/eye/ear',
+                blinkRate: 'helmet/eye/blink_rate',
+                fatigue: 'helmet/eye/fatigue'
+            }
+        };
+
+        let client = null;
+
+        // Update video button URL
+        document.getElementById('videoUrl').addEventListener('input', function() {
+            document.getElementById('videoButton').href = this.value;
+        });
+
+        // Initialize video button
+        document.getElementById('videoButton').href = CONFIG.videoUrl;
+
+        function connectMQTT() {
+            // Update config from inputs
+            CONFIG.broker = document.getElementById('mqttBroker').value;
+            CONFIG.port = parseInt(document.getElementById('mqttPort').value);
+            CONFIG.path = document.getElementById('mqttPath').value;
+            CONFIG.videoUrl = document.getElementById('videoUrl').value;
+            document.getElementById('videoButton').href = CONFIG.videoUrl;
+
+            // Disconnect if already connected
+            if (client) {
+                client.end();
+            }
+
+            // Connect to MQTT broker
+            const clientId = 'smart_helmet_dashboard_' + Math.random().toString(16).substr(2, 8);
+            const connectUrl = `ws://${CONFIG.broker}:${CONFIG.port}${CONFIG.path}`;
+
+            console.log('Connecting to:', connectUrl);
+
+            client = mqtt.connect(connectUrl, {
+                clientId: clientId,
+                clean: true,
+                connectTimeout: 4000,
+                reconnectPeriod: 1000,
+            });
+
+            client.on('connect', () => {
+                console.log('Connected to MQTT broker');
+                document.getElementById('connectionStatus').textContent = 'Connecté';
+                document.getElementById('connectionStatus').className = 'status connected';
+
+                // Subscribe to all topics
+                Object.values(CONFIG.topics).forEach(topic => {
+                    client.subscribe(topic, (err) => {
+                        if (!err) {
+                            console.log('Subscribed to:', topic);
+                        }
+                    });
+                });
+            });
+
+            client.on('message', (topic, message) => {
+                const value = message.toString();
+                console.log('Received:', topic, value);
+                updateDisplay(topic, value);
+            });
+
+            client.on('error', (err) => {
+                console.error('MQTT Error:', err);
+                document.getElementById('connectionStatus').textContent = 'Erreur de connexion';
+                document.getElementById('connectionStatus').className = 'status disconnected';
+            });
+
+            client.on('close', () => {
+                console.log('MQTT Connection closed');
+                document.getElementById('connectionStatus').textContent = 'Déconnecté';
+                document.getElementById('connectionStatus').className = 'status disconnected';
+            });
+        }
+
+        function updateDisplay(topic, value) {
+            const now = new Date().toLocaleTimeString('fr-FR');
+            document.getElementById('lastUpdate').textContent = now;
+
+            try {
+                // Try to parse JSON
+                const jsonValue = JSON.parse(value);
+                handleJsonData(topic, jsonValue);
+            } catch (e) {
+                // Not JSON, handle as string
+                handleStringData(topic, value);
+            }
+        }
+
+        function handleJsonData(topic, data) {
+            switch (topic) {
+                case CONFIG.topics.gps:
+                    if (data.lat) document.getElementById('gpsLat').textContent = data.lat.toFixed(6);
+                    if (data.lon) document.getElementById('gpsLon').textContent = data.lon.toFixed(6);
+                    break;
+                case CONFIG.topics.ear:
+                    if (data.ear_avg !== undefined) {
+                        document.getElementById('earValue').textContent = data.ear_avg.toFixed(3);
+                    }
+                    if (data.fatigue) {
+                        updateEyeCard('DROWSY', 'alert');
+                    }
+                    break;
+                case CONFIG.topics.fatigue:
+                    if (data.fatigue) {
+                        updateEyeCard('DROWSY', 'alert');
+                    }
+                    break;
+                default:
+                    handleStringData(topic, JSON.stringify(data));
+            }
+        }
+
+        function handleStringData(topic, value) {
+            switch (topic) {
+                case CONFIG.topics.eyeStatus:
+                    document.getElementById('eyeStatus').textContent = value;
+                    if (value === 'DROWSY' || value === 'YAWN') {
+                        updateEyeCard(value, 'alert');
+                    } else if (value === 'OPEN') {
+                        updateEyeCard(value, 'success');
+                    } else {
+                        updateEyeCard(value, '');
+                    }
+                    break;
+                case CONFIG.topics.heartRate:
+                    document.getElementById('heartRate').innerHTML = value + '<span class="card-unit">BPM</span>';
+                    break;
+                case CONFIG.topics.spo2:
+                    document.getElementById('spo2').innerHTML = value + '<span class="card-unit">%</span>';
+                    break;
+                case CONFIG.topics.alcohol:
+                    document.getElementById('alcohol').innerHTML = value + '<span class="card-unit">mg/L</span>';
+                    break;
+                case CONFIG.topics.pressure:
+                    document.getElementById('pressure').innerHTML = value + '<span class="card-unit">hPa</span>';
+                    break;
+                case CONFIG.topics.altitude:
+                    document.getElementById('altitude').innerHTML = value + '<span class="card-unit">m</span>';
+                    break;
+                case CONFIG.topics.leanAngle:
+                    document.getElementById('leanAngle').innerHTML = value + '<span class="card-unit">°</span>';
+                    break;
+                case CONFIG.topics.crash:
+                    document.getElementById('crashStatus').textContent = value;
+                    if (value === 'DETECTED' || value === 'true') {
+                        updateCrashCard('CRASH DÉTECTÉ', 'alert');
+                    } else {
+                        updateCrashCard('OK', 'success');
+                    }
+                    break;
+                case CONFIG.topics.ear:
+                    document.getElementById('earValue').textContent = parseFloat(value).toFixed(3);
+                    break;
+                case CONFIG.topics.blinkRate:
+                    document.getElementById('blinkRate').innerHTML = value + '<span class="card-unit">/min</span>';
+                    break;
+            }
+        }
+
+        function updateEyeCard(status, className) {
+            const card = document.getElementById('eyeCard');
+            card.className = 'card ' + className;
+        }
+
+        function updateCrashCard(status, className) {
+            const card = document.getElementById('crashCard');
+            card.className = 'card ' + className;
+        }
+
+        // Auto-connect on page load
+        window.onload = function() {
+            setTimeout(connectMQTT, 1000);
+        };
+    </script>
+</body>
+</html>

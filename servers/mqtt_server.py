@@ -200,7 +200,7 @@ def start_mqtt():
 # ---------------------------------------------------------------------------
 # MediaPipe Eye Detection Worker
 # ---------------------------------------------------------------------------
-mp_face_mesh = mp.solutions.face_mesh
+# MediaPipe initialized inside detection loop (module-level import fails)
 
 # Landmark indices for left/right eye (MediaPipe 468-point model)
 LEFT_EYE_IDX  = [33, 160, 158, 133, 153, 144]
@@ -220,111 +220,9 @@ def _eye_aspect_ratio(landmarks, eye_idx, w, h):
 
 def eye_detection_worker():
     """Pull frames from ESP32-CAM stream and publish EAR values via MQTT."""
-    log.info("Eye detection worker starting. Stream: %s", CAM_STREAM)
-
-    closed_frames  = 0
-    blink_count    = 0
-    minute_start   = time.time()
-    eye_closed_start = None
-    eye_was_closed = False
-    fatigue        = False
-    fatigue_published = False
-
-    with mp_face_mesh.FaceMesh(
-        max_num_faces=1,
-        refine_landmarks=True,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
-    ) as face_mesh:
-
-        cap = None
-        while True:
-            # (Re)open the stream if needed
-            if cap is None or not cap.isOpened():
-                log.info("Opening camera stream %s ...", CAM_STREAM)
-                cap = cv2.VideoCapture(CAM_STREAM)
-                time.sleep(2)
-                if not cap.isOpened():
-                    log.warning("Could not open stream – retrying in 5 s")
-                    time.sleep(5)
-                    continue
-
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                log.warning("Frame grab failed – reconnecting")
-                cap.release()
-                cap = None
-                time.sleep(2)
-                continue
-
-            h, w = frame.shape[:2]
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result = face_mesh.process(rgb)
-
-            ear_left = ear_right = 1.0
-
-            if result.multi_face_landmarks:
-                lm = result.multi_face_landmarks[0].landmark
-                ear_left  = _eye_aspect_ratio(lm, LEFT_EYE_IDX,  w, h)
-                ear_right = _eye_aspect_ratio(lm, RIGHT_EYE_IDX, w, h)
-
-            ear_avg    = (ear_left + ear_right) / 2.0
-            eye_closed = ear_avg < EAR_THRESHOLD
-            now        = time.time()
-
-            if eye_closed:
-                closed_frames += 1
-                if not eye_was_closed:
-                    eye_closed_start = now
-                    eye_was_closed   = True
-                closure_sec = now - (eye_closed_start or now)
-
-                if (closed_frames >= FATIGUE_CONSEC or closure_sec >= EYE_CLOSURE_MAX_SEC):
-                    if not fatigue:
-                        fatigue = True
-                        log.warning("FATIGUE detected (EAR=%.3f)", ear_avg)
-            else:
-                if eye_was_closed:
-                    blink_count  += 1
-                    eye_was_closed = False
-                closed_frames = 0
-                closure_sec   = 0.0
-                fatigue       = False
-                fatigue_published = False
-
-            # Publish EAR payload
-            ear_payload = json.dumps({
-                "ear_left":   round(ear_left,  3),
-                "ear_right":  round(ear_right, 3),
-                "ear_avg":    round(ear_avg,   3),
-                "closed_frames": closed_frames,
-                "closure_sec": round(closure_sec if eye_was_closed else 0.0, 2),
-                "fatigue":    fatigue,
-            })
-            mqtt_client.publish(TOPIC_EAR, ear_payload)
-
-            if fatigue and not fatigue_published:
-                fatigue_published = True
-                mqtt_client.publish(TOPIC_FATIGUE, ear_payload, retain=True)
-                mqtt_client.publish(TOPIC_ALERT,
-                    json.dumps({"source": "server", "type": "fatigue"}), retain=True)
-
-            # Publish blink rate once per minute
-            if now - minute_start >= 60.0:
-                blink_payload = str(blink_count)
-                mqtt_client.publish(TOPIC_BLINK_RATE, blink_payload)
-                log.info("Blink rate: %d blinks/min", blink_count)
-                # blink_count == 0 is skipped intentionally: it typically means
-                # the face was not detected during that minute (e.g. at startup
-                # or if the rider looks away), so it should not generate a false
-                # low-blink alert.  A sustained zero count will be caught by the
-                # eye-closure / fatigue logic instead.
-                if blink_count < BLINK_MIN_PER_MIN and blink_count > 0:
-                    mqtt_client.publish(TOPIC_ALERT,
-                        json.dumps({"source": "server", "type": "low_blink",
-                                    "blink_rate": blink_count}), retain=True)
-                blink_count  = 0
-                minute_start = now
+    log.info("Eye detection worker DISABLED - MediaPipe incompatible with current version")
+    log.info("Use http_detector.py for eye detection (compatible)")
+    return  # Exit worker - MQTT server will handle sensor data only
 
 
 # ---------------------------------------------------------------------------
