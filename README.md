@@ -4,7 +4,7 @@
 Ce dépôt utilise désormais **l'architecture HTTP** comme solution standard.
 
 - ✅ Recommandé: `servers/http_detector.py`
-- ⚠️ MQTT: conservé uniquement comme système **déprécié / archivé**
+- ⚠️ MQTT: conservé uniquement comme système **obsolète / archivé**
 
 La détection oculaire MediaPipe est fiable avec l'architecture HTTP (stream direct ESP32-CAM), contrairement à l'ancien flux MQTT.
 
@@ -56,4 +56,4 @@ Si vous venez du système MQTT:
 - Dépendances: réinstaller `requirements_clean.txt`
 
 ---
-Consultez `GUIDE_INSTALLATION.md` pour le guide pas à pas HTTP uniquement.
+Consultez `GUIDE_INSTALLATION.md` pour le guide d'installation HTTP détaillé.
