@@ -1,4 +1,8 @@
 """
+DEPRECATION NOTICE:
+This MQTT server is maintained for legacy compatibility only.
+For active drowsiness detection, use servers/http_detector.py (HTTP architecture).
+
 server.py
 Smart Helmet – Backend Server
 
@@ -297,6 +301,7 @@ def on_cmd_threshold(data):
 # Main
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    log.warning("DEPRECATED: mqtt_server.py is legacy-only. Use servers/http_detector.py for production eye detection.")
     # Start MQTT in background thread
     mqtt_thread = threading.Thread(target=start_mqtt, daemon=True)
     mqtt_thread.start()

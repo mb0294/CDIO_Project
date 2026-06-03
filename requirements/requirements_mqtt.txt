@@ -1,3 +1,9 @@
+# DEPRECATED: Legacy MQTT stack only.
+# For active drowsiness detection, use:
+#   pip install -r requirements/requirements_clean.txt
+# and run:
+#   python servers/http_detector.py --esp32 http://<ESP32_IP>
+
 flask>=2.3.3
 flask-socketio>=5.3.6
 paho-mqtt>=2.1.0
